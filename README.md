@@ -3,7 +3,10 @@
 Piwi is a CLI for quickly finding salts that create flags matching Uniswap V4 Hooks' addresses via CREATE2 or CREATE3.
 Written in Rust with [Alloy](https://github.com/alloy-rs/core).
 
-Piwi is heavely inspired by [Create2Crunch](https://github.com/0age/create2crunch), with the difference that it focuses on Uniswap V4 Hooks, will exit once it finds a salt and with additional CREATE3 support.
+Piwi is heavely inspired by [Maldon](https://github.com/flood-protocol/maldon), with the difference that it focuses on Uniswap V4 Hooks.
+
+## Installation
+
 ```bash
 git clone https://github.com/thepluck/Piwi.git
 cd Piwi
@@ -32,7 +35,7 @@ Usage: piwi create2 [OPTIONS] <DEPLOYER> <INIT_CODE_HASH> <FLAGS>
 Arguments:
   <DEPLOYER>        Address of the contract deployer
   <INIT_CODE_HASH>  Hash of the initialization code
-  <FLAGS>           Address representing the desired flags
+  <FLAGS>           Hex string representing the desired flags
 
 Options:
   -f, --factory <FACTORY>   Address of the Factory contract. Defaults to the Archanid's Factory
@@ -42,7 +45,7 @@ Usage: piwi create3 [OPTIONS] <DEPLOYER> <FLAGS>
 
 Arguments:
   <DEPLOYER>  Address of the contract deployer
-  <FLAGS>     Address representing the desired flags
+  <FLAGS>     Hex string representing the desired flags
 
 Options:
   -f, --factory <FACTORY>   Address of the Factory contract. Defaults to the LayerZero's Factory

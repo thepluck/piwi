@@ -25,8 +25,8 @@ pub(super) enum Piwi {
         /// Hash of the initialization code.
         init_code_hash: FixedBytes<32>,
 
-        /// Address representing the desired flags.
-        flags: Address,
+        /// Hex string representing the desired flags.
+        flags: String,
     },
 
     /// Mines a CREATE3 salt.
@@ -43,7 +43,7 @@ pub(super) enum Piwi {
         #[clap(short, long)]
         factory: Option<Address>,
 
-        /// Address representing the desired flags.
-        flags: Address,
+        /// Hex string representing the desired flags.
+        flags: String,
     },
 }

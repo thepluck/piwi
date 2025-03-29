@@ -1,9 +1,11 @@
 mod cli;
 mod mine;
 
+use std::error::Error;
+
 use clap::Parser;
 
-use alloy_primitives::{Address, address};
+use alloy_primitives::{Address, address, hex::FromHex};
 
 use {
     cli::Piwi,
@@ -27,7 +29,7 @@ const CREATE3_DEFAULT_FACTORY: Address = address!("0x8Cad6A96B0a287e29bA719257d0
 /// # Error
 ///
 /// Returns a hex parsing error if any hex inputs are malformed.
-fn main() -> Result<(), hex::FromHexError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let (address, salt) = match Piwi::parse() {
         Piwi::Create2 {
             deployer,
@@ -38,8 +40,12 @@ fn main() -> Result<(), hex::FromHexError> {
             // Use the provided factory or fall back to the default CREATE2 factory
             let factory = factory.unwrap_or(CREATE2_DEFAULT_FACTORY);
 
+            // Pad the flags with leading zeros to ensure it's 40 characters
+            let padded_flags = format!("{:0>40}", flags);
+
             // Mine for an address matching the flags using CREATE2 deployment
-            Create2Miner::new(deployer, factory, init_code_hash).mine(&flags)
+            Create2Miner::new(deployer, factory, init_code_hash)
+                .mine(&Address::from_hex(&padded_flags)?)
         }
         Piwi::Create3 {
             deployer,
@@ -49,8 +55,11 @@ fn main() -> Result<(), hex::FromHexError> {
             // Use the provided factory or fall back to the default CREATE3 factory
             let factory = factory.unwrap_or(CREATE3_DEFAULT_FACTORY);
 
+            // Pad the flags with leading zeros to ensure it's 40 characters
+            let padded_flags = format!("{:0>40}", flags);
+
             // Mine for an address matching the flags using CREATE3 deployment
-            Create3Miner::new(deployer, factory).mine(&flags)
+            Create3Miner::new(deployer, factory).mine(&Address::from_hex(&padded_flags)?)
         }
     };
 

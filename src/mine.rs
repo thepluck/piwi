@@ -62,7 +62,7 @@ pub(super) trait Miner: Sync {
 
                 // Return the candidate if its lower bits match the pattern
                 (candidate.bit_and(FLAGS_MASK) == *flags)
-                    .then(|| (candidate, FixedBytes::from_slice(salt.as_ref())))
+                    .then(|| (candidate, FixedBytes::from_slice(&salt)))
             });
 
             // If we found a match, return it and exit
