@@ -28,10 +28,14 @@ fn hex_to_address(hex: &String, pad_leading_zeros: bool) -> Address {
 
 /// Computes a bitmask that isolates the upper `prefix_len` bits of an address.
 fn compute_prefix_mask(prefix_len: usize) -> Address {
-    let mut mask = Address::default();
-    print!("Prefix length: {prefix_len}");
-    mask[0..8].copy_from_slice(&((1u64 << (prefix_len << 2)) - 1).to_le_bytes());
-    mask
+    let mask_number = if prefix_len % 2 == 0 {
+        (1u64 << (prefix_len << 2)) - 1
+    } else {
+        (1u64 << ((prefix_len + 1) << 2)) - (15u64 << ((prefix_len - 1) << 2)) - 1
+    };
+    let mut mask_address = Address::default();
+    mask_address[0..8].copy_from_slice(&mask_number.to_le_bytes());
+    mask_address
 }
 
 /// Checks if a candidate address matches the specified flags and prefix.
@@ -140,7 +144,7 @@ impl Miner for Create2Miner {
 
                 // Return the candidate if it matches the flags and prefix
                 check_candidate(&flags, &prefix, &prefix_mask, &candidate)
-                    .then(|| (candidate, FixedBytes::<32>::from_slice(&salt)))
+                    .then(|| (candidate, FixedBytes::from_slice(&salt)))
             });
 
             // If we found a match, return it and exit
@@ -189,7 +193,18 @@ impl Create3Miner {
     }
 
     /// Computes the contract address that would result from deploying with the given salt.
+    #[inline]
     fn compute_create3_address(&self, salt: &[u8; 52]) -> Address {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static ITERATION: AtomicU64 = AtomicU64::new(0);
+
+        // Print the current iteration value for debugging
+        let current_iteration = ITERATION.fetch_add(1, Ordering::Relaxed);
+        if current_iteration % 1000000 == 0 {
+            println!("iteration: {}", current_iteration);
+        }
+
         // First deploy the proxy using CREATE2
         let proxy = self
             .factory
@@ -206,10 +221,6 @@ impl Miner for Create3Miner {
         let prefix_mask = compute_prefix_mask(prefix.len());
         let flags = hex_to_address(flags, true);
         let prefix = hex_to_address(prefix, false);
-
-        println!("Flags: {flags:?}");
-        println!("Prefix: {prefix:?}");
-        println!("Prefix mask: {prefix_mask:?}");
 
         // Create a random number generator
         let mut rng = rng();
@@ -235,7 +246,7 @@ impl Miner for Create3Miner {
 
                 // Return the candidate if it matches the flags and prefix
                 check_candidate(&flags, &prefix, &prefix_mask, &candidate)
-                    .then(|| (candidate, FixedBytes::<32>::from_slice(&salt[20..52])))
+                    .then(|| (candidate, FixedBytes::from_slice(&salt[20..52])))
             });
 
             // If we found a match, return it and exit
@@ -249,7 +260,9 @@ impl Miner for Create3Miner {
 
 #[test]
 fn test_compute_create3_address() {
-    let deployer = alloy_primitives::address!("0x9fC3dc011b461664c835F2527fffb1169b3C213e");
+    use alloy_primitives::address;
+
+    let deployer = address!("0x9fC3dc011b461664c835F2527fffb1169b3C213e");
     let factory = crate::CREATE3_DEFAULT_FACTORY;
     let miner = Create3Miner::new(deployer, factory);
     let mut salt = [2u8; 52];
@@ -257,6 +270,6 @@ fn test_compute_create3_address() {
     let computed = miner.compute_create3_address(&salt);
     assert_eq!(
         computed,
-        alloy_primitives::address!("0x1298be70f771753b5490b4708513d9f0F513dd36")
+        address!("0x1298be70f771753b5490b4708513d9f0F513dd36")
     );
 }
