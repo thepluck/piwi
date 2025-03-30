@@ -1,80 +1,73 @@
-use alloy_primitives::{Address, FixedBytes, address, keccak256};
+use alloy_primitives::{Address, FixedBytes, address, hex::FromHex, keccak256};
 use rand::{Rng, rng};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 /// Maximum value for the nonce segment of the salt (6 bytes).
-/// We shift u64::MAX right by 16 bits (2 bytes) to get a 6-byte value.
 const MAX_NONCE: u64 = u64::MAX >> 16;
 
-/// Bitmask that isolates the bottom 14 bits of an Ethereum address.
-/// Used to determine if an address matches the desired pattern.
-const FLAGS_MASK: Address = Address(FixedBytes([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x3f, 0xff,
-]));
+/// Bitmask that isolates the lower 14 bits of an Ethereum address.
+const FLAGS_MASK: Address = address!("0x0000000000000000000000000000000000003fFF");
+
+/// Converts a hex string to an Ethereum address.
+///
+/// # Arguments
+/// * `hex` - The hex string to convert.
+/// * `pad_leading_zeros` - If true, pads the hex string with leading zeros to
+///   ensure it's 40 characters long, else pads with trailing zeros.
+fn hex_to_address(hex: &String, pad_leading_zeros: bool) -> Address {
+    // Pad the hex string with zeros to ensure it's 40 characters
+    let padded_hex = if pad_leading_zeros {
+        format!("{:0>40}", hex)
+    } else {
+        format!("{:0<40}", hex)
+    };
+
+    // Convert the padded hex string to address
+    Address::from_hex(&padded_hex).expect("Could not convert hex string to address")
+}
+
+/// Computes a bitmask that isolates the upper `prefix_len` bits of an address.
+fn compute_prefix_mask(prefix_len: usize) -> Address {
+    let mut mask = Address::default();
+    print!("Prefix length: {prefix_len}");
+    mask[0..8].copy_from_slice(&((1u64 << (prefix_len << 2)) - 1).to_le_bytes());
+    mask
+}
+
+/// Checks if a candidate address matches the specified flags and prefix.
+///
+/// # Arguments
+/// * `flags` - The flags to match.
+/// * `prefix` - The prefix to match.
+/// * `prefix_mask` - The bitmask for the prefix.
+/// * `candidate` - The candidate address to check.
+fn check_candidate(
+    flags: &Address,
+    prefix: &Address,
+    prefix_mask: &Address,
+    candidate: &Address,
+) -> bool {
+    (candidate.bit_and(FLAGS_MASK) == *flags) && (candidate.bit_and(*prefix_mask) == *prefix)
+}
 
 /// Defines the interface for address mining algorithms.
 ///
 /// Implementations must be thread-safe to enable parallel mining.
-pub(super) trait Miner: Sync {
-    /// Calculates the contract address that would result from deploying with the given salt.
-    ///
-    /// This is the core method that each miner must implement based on the
-    /// deployment method (CREATE2, CREATE3, etc.).
-    fn compute_address(&self, salt: &[u8; 32]) -> Address;
-
-    /// Creates the initial salt value used for mining.
-    fn generate_salt_base(&self) -> [u8; 32];
-
-    /// Placeholder for any setup before the mining process begins.
-    fn before_mine(&self) {}
-
-    /// Searches for a salt value that, when used for deployment, produces a contract
-    /// address matching the specified pattern in its lower bits.
+pub(super) trait Miner {
+    /// Searches for a salt value that, when used for deployment, produces a
+    /// contract address matching the specified pattern in its lower bits.
     ///
     /// The mining process:
-    /// 1. Creates a salt with the deployer address
-    /// 2. Fills the middle section with random bytes
-    /// 3. Systematically tries different nonce values in the final section
-    /// 4. Uses parallel processing to speed up the search
-    /// 5. Returns the first matching address and its corresponding salt
-    fn mine(&self, flags: &Address) -> (Address, FixedBytes<32>) {
-        // setup the mining process
-        self.before_mine();
-
-        let mut rng = rng();
-        let mut salt_base = self.generate_salt_base();
-
-        loop {
-            // Fill the random segment (bytes 20-25) with new random values
-            // for each batch of nonce attempts
-            rng.fill(salt_base[20..26].as_mut());
-
-            // Parallelize the search across different nonce values
-            let mining_result = (0..MAX_NONCE).into_par_iter().find_map_any(move |nonce| {
-                let mut salt = salt_base;
-
-                // Set the nonce segment (bytes 26-31) with the current nonce value
-                salt[26..32].copy_from_slice(&nonce.to_be_bytes()[2..]);
-
-                // Calculate the resulting contract address
-                let candidate = self.compute_address(&salt);
-
-                // Return the candidate if its lower bits match the pattern
-                (candidate.bit_and(FLAGS_MASK) == *flags)
-                    .then(|| (candidate, FixedBytes::from_slice(&salt)))
-            });
-
-            // If we found a match, return it and exit
-            if let Some(found) = mining_result {
-                break found;
-            }
-            // Otherwise, try with a new set of random bytes
-        }
-    }
+    /// 1. Create a salt with the deployer address
+    /// 2. Fill the middle section with random bytes
+    /// 3. Systematically try different nonce values in the final section
+    /// 4. Use parallel processing to speed up the search
+    /// 5. Return the first matching address and its corresponding salt
+    fn mine(&self, flags: &String, prefix: &String) -> (Address, FixedBytes<32>);
 }
 
-/// Implementation for mining vanity addresses using the CREATE2 deployment method.
+/// Implementation for mining vanity addresses using the CREATE2 deployment
+/// method.
 ///
 /// CREATE2 generates deterministic contract addresses based on:
 /// - The factory contract address
@@ -82,13 +75,13 @@ pub(super) trait Miner: Sync {
 /// - The initialization code hash
 /// - A 32-byte salt value
 ///
-/// This allows finding a salt that produces a contract address with desired properties.
+/// This allows finding a salt that produces a contract address with desired
+/// properties.
 ///
 /// The 32-byte salt used for mining is structured as follows:
 /// - Bytes 0-19: Deployer address (prevents frontrunning by other users)
 /// - Bytes 20-25: Random values (prevents collisions between mining sessions)
 /// - Bytes 26-31: Nonce values (systematically explored during mining)
-///
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Create2Miner {
     /// Address of the account that will call the factory
@@ -105,7 +98,8 @@ impl Create2Miner {
     /// # Arguments
     /// * `deployer` - The address that will call the factory contract
     /// * `factory` - The address of the CREATE2 factory contract
-    /// * `init_code_hash` - The keccak256 hash of the contract initialization code
+    /// * `init_code_hash` - The keccak256 hash of the contract initialization
+    ///   code
     pub(super) fn new(deployer: Address, factory: Address, init_code_hash: FixedBytes<32>) -> Self {
         Self {
             deployer,
@@ -116,19 +110,50 @@ impl Create2Miner {
 }
 
 impl Miner for Create2Miner {
-    fn compute_address(&self, salt: &[u8; 32]) -> Address {
-        self.factory.create2(salt, self.init_code_hash)
-    }
+    fn mine(&self, flags: &String, prefix: &String) -> (Address, FixedBytes<32>) {
+        // Convert the flags and prefix from hex strings to addresses
+        let prefix_mask = compute_prefix_mask(prefix.len());
+        let flags = hex_to_address(flags, true);
+        let prefix = hex_to_address(prefix, false);
 
-    fn generate_salt_base(&self) -> [u8; 32] {
-        // Fills the first 20 bytes with the deployer address
-        let mut salt = [0u8; 32];
-        salt[0..20].copy_from_slice(self.deployer.as_slice());
-        salt
+        // Create a random number generator
+        let mut rng = rng();
+
+        // Fill the first 20 bytes with the deployer address
+        let mut salt_base = [0u8; 32];
+        salt_base[0..20].copy_from_slice(self.deployer.as_slice());
+
+        loop {
+            // Fill the random segment (bytes 20-25) with new random values
+            // for each batch of nonce attempts
+            rng.fill(salt_base[20..26].as_mut());
+
+            // Parallelize the search across different nonce values
+            let mining_result = (0..MAX_NONCE).into_par_iter().find_map_any(move |nonce| {
+                let mut salt = salt_base;
+
+                // Set the nonce segment (bytes 26-31) with the current nonce value
+                salt[26..32].copy_from_slice(&nonce.to_be_bytes()[2..]);
+
+                // Calculate the resulting contract address
+                let candidate = self.factory.create2(salt, self.init_code_hash);
+
+                // Return the candidate if it matches the flags and prefix
+                check_candidate(&flags, &prefix, &prefix_mask, &candidate)
+                    .then(|| (candidate, FixedBytes::<32>::from_slice(&salt)))
+            });
+
+            // If we found a match, return it and exit
+            if let Some(answer) = mining_result {
+                break answer;
+            }
+            // Otherwise, try with a new set of random bytes
+        }
     }
 }
 
-/// Implementation for mining vanity addresses using the CREATE3 deployment method.
+/// Implementation for mining vanity addresses using the CREATE3 deployment
+/// method.
 ///
 /// CREATE3 is a two-step deployment process:
 /// 1. Deploy a proxy contract using CREATE2 with a salt
@@ -138,8 +163,9 @@ impl Miner for Create2Miner {
 /// the contract's initialization code.
 ///
 /// The 32-byte salt used for mining is structured as follows:
-/// - Bytes 0-25: Random values (prevents collisions between mining sessions)
-/// - Bytes 26-31: Nonce values (systematically explored during mining)
+/// - Bytes 0-19: Deployer address (prevents frontrunning by other users)
+/// - Bytes 20-45: Random values (prevents collisions between mining sessions)
+/// - Bytes 46-51: Nonce values (systematically explored during mining)
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Create3Miner {
     /// Address of the account that will call the factory
@@ -147,8 +173,6 @@ pub(super) struct Create3Miner {
     /// Address of the factory contract that will perform the deployment
     factory: Address,
 }
-
-static mut SALT_BUFFER: [u8; 52] = [0u8; 52];
 
 impl Create3Miner {
     /// Keccak256 hash of the CREATE3 proxy contract initialization code.
@@ -160,53 +184,79 @@ impl Create3Miner {
     ];
 
     /// Creates a new CREATE3 miner with the specified parameters.
-    ///
-    /// # Arguments
-    /// * `factory` - The address of the CREATE3 factory contract
-    /// * `deployer` - The address that will call the factory contract
     pub fn new(deployer: Address, factory: Address) -> Self {
         Self { deployer, factory }
+    }
+
+    /// Computes the contract address that would result from deploying with the given salt.
+    fn compute_create3_address(&self, salt: &[u8; 52]) -> Address {
+        // First deploy the proxy using CREATE2
+        let proxy = self
+            .factory
+            .create2(keccak256(salt), Self::PROXY_INIT_CODE_HASH);
+
+        // Then compute the address the proxy would deploy using CREATE
+        proxy.create(0x1)
     }
 }
 
 impl Miner for Create3Miner {
-    fn compute_address(&self, salt: &[u8; 32]) -> Address {
-        unsafe {
-            // Fills the remaining bytes with the salt
-            SALT_BUFFER[20..].copy_from_slice(salt);
+    fn mine(&self, flags: &String, prefix: &String) -> (Address, FixedBytes<32>) {
+        // Convert the flags and prefix from hex strings to addresses
+        let prefix_mask = compute_prefix_mask(prefix.len());
+        let flags = hex_to_address(flags, true);
+        let prefix = hex_to_address(prefix, false);
 
-            // First deploy the proxy using CREATE2
-            let proxy = self
-                .factory
-                .create2(keccak256(SALT_BUFFER), Self::PROXY_INIT_CODE_HASH);
+        println!("Flags: {flags:?}");
+        println!("Prefix: {prefix:?}");
+        println!("Prefix mask: {prefix_mask:?}");
 
-            // Then compute the address the proxy would deploy using CREATE
-            proxy.create(0x1)
-        }
-    }
+        // Create a random number generator
+        let mut rng = rng();
 
-    fn generate_salt_base(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    fn before_mine(&self) {
         // Fill the first 20 bytes with the deployer address
-        unsafe {
-            SALT_BUFFER[0..20].copy_from_slice(self.deployer.as_slice());
+        let mut salt_base = [0u8; 52];
+        salt_base[0..20].copy_from_slice(self.deployer.as_slice());
+
+        loop {
+            // Fill the random segment (bytes 20-25) with new random values
+            // for each batch of nonce attempts
+            rng.fill(salt_base[20..46].as_mut());
+
+            // Parallelize the search across different nonce values
+            let mining_result = (0..MAX_NONCE).into_par_iter().find_map_any(move |nonce| {
+                let mut salt = salt_base;
+
+                // Set the nonce segment (bytes 26-31) with the current nonce value
+                salt[46..52].copy_from_slice(&nonce.to_be_bytes()[2..]);
+
+                // Calculate the resulting contract address
+                let candidate = self.compute_create3_address(&salt);
+
+                // Return the candidate if it matches the flags and prefix
+                check_candidate(&flags, &prefix, &prefix_mask, &candidate)
+                    .then(|| (candidate, FixedBytes::<32>::from_slice(&salt[20..52])))
+            });
+
+            // If we found a match, return it and exit
+            if let Some(answer) = mining_result {
+                break answer;
+            }
+            // Otherwise, try with a new set of random bytes
         }
     }
 }
 
 #[test]
-fn test_create3_compute_address() {
-    let deployer = address!("0x9fC3dc011b461664c835F2527fffb1169b3C213e");
+fn test_compute_create3_address() {
+    let deployer = alloy_primitives::address!("0x9fC3dc011b461664c835F2527fffb1169b3C213e");
     let factory = crate::CREATE3_DEFAULT_FACTORY;
     let miner = Create3Miner::new(deployer, factory);
-    let salt = [2u8; 32];
-    miner.before_mine();
-    let computed = miner.compute_address(&salt);
+    let mut salt = [2u8; 52];
+    salt[0..20].copy_from_slice(deployer.as_slice());
+    let computed = miner.compute_create3_address(&salt);
     assert_eq!(
         computed,
-        address!("0x1298be70f771753b5490b4708513d9f0F513dd36")
+        alloy_primitives::address!("0x1298be70f771753b5490b4708513d9f0F513dd36")
     );
 }

@@ -27,6 +27,10 @@ pub(super) enum Piwi {
 
         /// Hex string representing the desired flags.
         flags: String,
+
+        /// Optional prefix for the mined address.
+        #[clap(short, long)]
+        prefix: Option<String>,
     },
 
     /// Mines a CREATE3 salt.
@@ -45,5 +49,9 @@ pub(super) enum Piwi {
 
         /// Hex string representing the desired flags.
         flags: String,
+
+        /// Optional prefix for the mined address. Defaults to an empty string.
+        #[clap(short, long)]
+        prefix: Option<String>,
     },
 }

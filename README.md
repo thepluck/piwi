@@ -39,6 +39,7 @@ Arguments:
 
 Options:
   -f, --factory <FACTORY>   Address of the Factory contract. Defaults to the Archanid's Factory
+  -p, --prefix <PREFIX>     Optional prefix for the mined address. Defaults to an empty string
   -h, --help                Print help (see a summary with '-h')
 
 Usage: piwi create3 [OPTIONS] <DEPLOYER> <FLAGS>
@@ -49,5 +50,6 @@ Arguments:
 
 Options:
   -f, --factory <FACTORY>   Address of the Factory contract. Defaults to the LayerZero's Factory
+  -p, --prefix <PREFIX>     Optional prefix for the mined address. Defaults to an empty string
   -h, --help                Print help (see a summary with '-h')
 ```
